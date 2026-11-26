@@ -14,10 +14,16 @@ export const openaiScripts: CallScript[] = [
 const { size, count } = options;
 const quality = ["low", "medium", "high", "xhigh", "max"].includes(options.quality) ? options.quality : undefined;
 const background = options.background === "transparent" ? "transparent" : undefined;
-// 沿用此调用方式原有的尺寸约束，其他脚本自行决定支持的尺寸。
+// 服务端声明了尺寸档位时按档位收敛（并集语义：任一档位放行即可）。
+// 未声明时沿用此调用方式原有的尺寸约束，其他脚本自行决定支持的尺寸。
+const tierMaxEdge = { "1K": 1024, "2K": 2048, "4K": 3840 };
+const allowedMaxEdge = Array.isArray(options.sizeTiers) && options.sizeTiers.length
+    ? Math.max(...options.sizeTiers.map((tier) => tierMaxEdge[tier] || 0))
+    : 0;
 if (size) {
     const [width, height] = size.split("x").map(Number);
     if (
+        (allowedMaxEdge > 0 && Math.max(width, height) > allowedMaxEdge) ||
         !Number.isInteger(width) ||
         !Number.isInteger(height) ||
         width <= 0 ||

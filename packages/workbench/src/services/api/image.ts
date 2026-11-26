@@ -1,6 +1,6 @@
 import { nanoid } from "nanoid";
 
-import { channelWrites, resolveModelRequestConfig, type AiConfig } from "@workbench/stores/use-config-store";
+import { channelWrites, findGroupModel, resolveModelRequestConfig, type AiConfig } from "@workbench/stores/use-config-store";
 import { callScriptsReady } from "@workbench/stores/use-call-script-store";
 import { models } from "./models/runtime";
 import type { ModelRequestOptions } from "./models/types";
@@ -66,6 +66,9 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
 export async function requestGeneration(config: AiConfig, prompt: string, options?: ModelRequestOptions, references: ReferenceImage[] = []) {
     await Promise.all([callScriptsReady, channelWrites.flush()]);
     const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
+    // 渠道模型上带着服务端声明的尺寸档位，交给脚本做收敛校验。
+    const channelModel = findGroupModel(config, config.model || config.imageModel)?.model;
+    const sizeTiers = channelModel?.image?.sizeTiers;
     const dimensions = parseImageDimensions(config.size);
     const ratio = dimensions ? `${dimensions.width}:${dimensions.height}` : config.size === "auto" ? undefined : config.size;
     const resolution = dimensions ? Object.keys(imageSizePresets).find((scale) => Object.values(imageSizePresets[scale]).includes(config.size))?.toUpperCase() : undefined;
@@ -80,6 +83,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
             quality: config.quality,
             count: Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1))),
             background: config.background,
+            ...(sizeTiers?.length ? { sizeTiers } : {}),
         },
     }, options);
     return result.map((dataUrl) => ({ id: nanoid(), dataUrl }));
