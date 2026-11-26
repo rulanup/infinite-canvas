@@ -38,6 +38,8 @@ export function getCanvasApiKey(): string | undefined {
  */
 export function installCanvasIdentityBridge() {
     if (typeof window === "undefined" || window.parent === window) return;
+    // 同一浏览器换账号时 localStorage 里可能还是上一个人的 key，调用会记到别人账上。
+    try { localStorage.removeItem(STORAGE_KEY); } catch { /* 存储不可用时忽略 */ }
     window.addEventListener("message", (event) => {
         if (event.source !== window.parent) return;
         const payload = event.data;
