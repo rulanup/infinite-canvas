@@ -13,6 +13,14 @@ export type ChannelModel = {
      * 新增模型时按名称和用途预选脚本；用户可以重新选择。
      */
     scriptId?: string;
+    /**
+     * 服务端声明的可用调用协议（如 images / gemini / chat）；缺省视为 chat。
+     */
+    protocols?: string[];
+    /**
+     * 服务端声明的生图参数约束；缺省表示不收敛。
+     */
+    image?: { sizeTiers?: string[]; sizes?: string[] };
     agentSettings?: AgentModelSettings;
 };
 
@@ -71,6 +79,8 @@ export const channelsSchema = z.array(z.object({
         id: z.string(), name: z.string(), apiKey: z.string(), hasApiKey: z.boolean().optional(),
         models: z.array(z.object({
             name: z.string(), capability: z.enum(modelCapabilities), scriptId: z.string().optional(),
+            protocols: z.array(z.string()).optional(),
+            image: z.object({ sizeTiers: z.array(z.string()).optional(), sizes: z.array(z.string()).optional() }).optional(),
             agentSettings: z.object({ contextWindow: z.number().optional(), reasoningEffort: z.enum(["auto", "low", "medium", "high", "xhigh"]).optional(), autoCompact: z.boolean().optional() }).optional(),
         })),
     })),
