@@ -1,5 +1,6 @@
 import { usePluginStore } from "@workbench/stores/use-plugin-store";
 import type { ChannelModel, ModelChannel, ModelGroup, ModelListFormat } from "@infinite-canvas/shared/channels";
+import type { ChannelModelEntry } from "@infinite-canvas/model-runtime/channels";
 import { ModelExecutionError, modelErrorMessages } from "@infinite-canvas/shared/model-http";
 import { StorageError } from "@infinite-canvas/shared/storage-data";
 import { modelCapabilityLabels } from "@workbench/constant/labels";
@@ -79,9 +80,11 @@ export function ChannelEditorPanel({ channel, groupId, onChange, newChannel, spo
         patchGroup({ models: group!.models.filter((model) => !names.has(model.name)) });
         setSelected((current) => new Set([...current].filter((name) => !names.has(name))));
     };
+    // 服务端拉取到的元数据按名称索引，新增模型时带上，避免只存下名称而丢掉协议与参数约束。
+    const fetchedEntries = useRef(new Map<string, ChannelModelEntry>());
     const addModels = (names: string[]) => {
         const current = useConfigStore.getState().config.channels.find((item) => item.id === channel.id)!;
-        onChange({ ...current, groups: current.groups.map((item) => item.id === groupId ? { ...item, models: [...item.models, ...names.filter((name) => !item.models.some((model) => model.name === name)).map(detectChannelModel)] } : item) });
+        onChange({ ...current, groups: current.groups.map((item) => item.id === groupId ? { ...item, models: [...item.models, ...names.filter((name) => !item.models.some((model) => model.name === name)).map((name) => detectChannelModel(name, fetchedEntries.current.get(name)))] } : item) });
         setSearch("");
     };
     const addManual = () => {
@@ -100,8 +103,10 @@ export function ChannelEditorPanel({ channel, groupId, onChange, newChannel, spo
         setLoading(true);
         try {
             await channelWrites.flush();
-            const models = [...new Set(await channels.listModels(channel, group!, listFormat, controller.signal))];
+            const entries = await channels.listModelEntries(channel, group!, listFormat, controller.signal);
             if (controller.signal.aborted) return;
+            fetchedEntries.current = new Map(entries.map((entry) => [entry.name, entry]));
+            const models = [...new Set(entries.map((entry) => entry.name))];
             if (!models.length) {
                 toast.info("未获取到可用模型", workbenchMessageOptions.info);
             } else if (models.length > 5) {

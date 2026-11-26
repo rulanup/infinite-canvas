@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { z } from "zod";
 import { createParser } from "eventsource-parser";
-import { fetchChannelModels } from "@infinite-canvas/model-runtime/channels";
+import { fetchChannelModelEntries } from "@infinite-canvas/model-runtime/channels";
 import { buildModelApiUrl } from "@infinite-canvas/model-runtime/script";
 import { channelsSchema, type ModelChannel } from "@infinite-canvas/shared/channels";
 import { taskSubmissionSchema, localModelRequestSchema, modelErrorMessages, ModelExecutionError } from "@infinite-canvas/shared/model-http";
@@ -77,7 +77,7 @@ export function mountModels(app: Express, storage: FsStorage, tasks: ModelTasks)
         const signal = requestSignal(res);
         try {
             const { channel, group } = await findChannelGroup(storage, input.data.groupId);
-            res.json(await fetchChannelModels(channel.baseUrl, group.apiKey, input.data.format, (url) => url, signal));
+            res.json(await fetchChannelModelEntries(channel.baseUrl, group.apiKey, input.data.format, (url) => url, signal));
         } catch (error) {
             if (signal.aborted) return;
             if (error instanceof ModelExecutionError) return void res.status(502).json({ error: { code: error.code } });

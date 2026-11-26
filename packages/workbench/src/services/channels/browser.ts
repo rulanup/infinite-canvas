@@ -1,7 +1,7 @@
 import { appDatabase } from "@workbench/utils/indexed-db";
 import { network } from "@workbench/services/network/runtime";
 import localforage from "localforage";
-import { fetchChannelModels } from "@infinite-canvas/model-runtime/channels";
+import { fetchChannelModelEntries, fetchChannelModels } from "@infinite-canvas/model-runtime/channels";
 
 import type { ChannelAdapter } from "./runtime";
 import type { ModelChannel } from "@infinite-canvas/shared/channels";
@@ -15,5 +15,6 @@ export function createBrowserChannels(): ChannelAdapter {
             return channels;
         },
         listModels: (channel, group, format, signal) => fetchChannelModels(channel.baseUrl, group.apiKey, format, network.url, signal),
+        listModelEntries: (channel, group, format, signal) => fetchChannelModelEntries(channel.baseUrl, group.apiKey, format, network.url, signal),
     };
 }
