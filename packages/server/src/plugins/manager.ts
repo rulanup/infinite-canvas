@@ -36,10 +36,10 @@ export class PluginManager implements PluginAdapter {
     private queue: Promise<unknown> = Promise.resolve();
     private recoveryAllowed = new Set<string>();
     private controller = new AbortController();
-    private recovered?: Promise<void>;
+    private recovered = new Map<string, Promise<void>>();
     constructor(private storage: FsStorage, private skipThirdPartyPlugins = false) {}
 
-    private get root() { return path.join(this.storage.directory, "plugins"); }
+    private get root() { return path.join(this.storage.root(), "plugins"); }
 
     private async state(): Promise<ManagerState> {
         const saved = (await this.storage.read<ManagerState>("privateConfig", "plugin-manager"))?.value;
@@ -96,7 +96,7 @@ export class PluginManager implements PluginAdapter {
     }
 
     async list() {
-        await (this.recovered ??= this.recover());
+        const recoverRoot = this.root; if (!this.recovered.has(recoverRoot)) this.recovered.set(recoverRoot, this.recover()); await this.recovered.get(recoverRoot);
         const state = await this.state();
         const names = await readdir(this.root).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return []; throw error; });
         const records = await Promise.all(names.filter(isPluginFolder).map((id) => this.describe(state, id).catch((error) => { logger.error("读取插件目录失败", { id, error }); return null; })));

@@ -1,3 +1,4 @@
+import { currentStorageUser } from "../storage/scope.js";
 import express, { type Express, type Response } from "express";
 import type { FileHandle } from "node:fs/promises";
 import { z } from "zod";
@@ -70,7 +71,7 @@ export function mountStorage(app: Express, storage: FsStorage) {
     });
     app.post("/api/storage-inspection/open-folder", (_req, res) => {
         const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
-        spawn(command, [storage.directory], { detached: true, stdio: "ignore" }).unref();
+        spawn(command, [storage.root()], { detached: true, stdio: "ignore" }).unref();
         res.status(204).end();
     });
     app.get("/api/storage-inspection/:collection", async (req, res) => {
@@ -158,7 +159,10 @@ export function mountStorage(app: Express, storage: FsStorage) {
 
 export function watchStorage(socket: WebSocket, storage: FsStorage) {
     socket.send(JSON.stringify({ type: "ready", data: {} }));
+    // 连接建立时的用户作用域；写入在请求作用域内同步 notify，只转发同一用户的变更。
+    const owner = currentStorageUser();
     const unsubscribe = storage.subscribe((event) => {
+        if (currentStorageUser() !== owner) return;
         if (publicStorageCollections.some((name) => name === event.collection) || event.collection.startsWith("plugin:") || event.collection.startsWith("plugin-files:")) socket.send(JSON.stringify({ type: "change", data: event }));
     });
     socket.on("close", unsubscribe);

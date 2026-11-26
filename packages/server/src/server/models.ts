@@ -18,7 +18,7 @@ import { requestSignal } from "./request-signal.js";
 
 /** 模型失败的完整诊断只写私有日志；页面只收到错误码与模型服务返回的错误说明。 */
 async function logModelFailure(storage: FsStorage, line: string) {
-    try { await appendFile(path.join(storage.directory, "private", "model-diagnostics.log"), `${new Date().toISOString()} ${line.slice(0, 1000)}\n`, "utf8"); }
+    try { await appendFile(path.join(storage.root(), "private", "model-diagnostics.log"), `${new Date().toISOString()} ${line.slice(0, 1000)}\n`, "utf8"); }
     catch { /* 诊断日志失败不影响请求 */ }
 }
 

@@ -2,7 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { ModelExecutionError, type LocalModelRequest, type ModelTaskTarget, type ModelTask, type ModelErrorCode } from "@infinite-canvas/shared/model-http";
 import type { ModelCallUpstream } from "@infinite-canvas/shared/model-calls";
+import { existsSync } from "node:fs";
+import { readdir } from "node:fs/promises";
+import path from "node:path";
 import type { FsStorage } from "../storage/fs-storage.js";
+import { currentStorageUser, runInStorageScope } from "../storage/scope.js";
 import { logger } from "../utils/logger.js";
 import { toModelError } from "@infinite-canvas/model-runtime/execute";
 import { executeModel, type RemoteVideo } from "./execute.js";
@@ -30,7 +34,22 @@ export class ModelTasks {
         this.ready = this.restore();
     }
 
+    /** 内存表的 key 带上用户作用域，不同用户即使 taskId 相同也互不影响。 */
+    private key(taskId: string) {
+        return `${currentStorageUser() ?? ""}:${taskId}`;
+    }
+
+    /** 启动恢复：先处理基础目录，再逐个进入用户目录的作用域处理。 */
     private async restore() {
+        await this.restoreScope();
+        const base = this.storage.directory;
+        for (const entry of await readdir(base, { withFileTypes: true }).catch(() => [])) {
+            if (!entry.isDirectory() || !/^[\w-]{1,64}$/.test(entry.name) || !existsSync(path.join(base, entry.name, "workspace.json"))) continue;
+            await runInStorageScope(entry.name, () => this.restoreScope());
+        }
+    }
+
+    private async restoreScope() {
         for (const row of await this.storage.list("task")) {
             const record = row.value as TaskRecord;
             const { status, code } = record.snapshot;
@@ -49,7 +68,7 @@ export class ModelTasks {
         if (this.closing) throw new ModelExecutionError("MODEL_UNAVAILABLE");
         if (request.action === "video-query") throw new ModelExecutionError("MODEL_CONFIG_MISSING");
         const fingerprint = createHash("sha256").update(JSON.stringify([request, target])).digest("hex");
-        const opening = this.opening.get(taskId);
+        const opening = this.opening.get(this.key(taskId));
         if (opening) await opening;
         const action = request.action;
         const create = async () => {
@@ -66,13 +85,13 @@ export class ModelTasks {
             return snapshot;
         };
         const pending = create();
-        this.opening.set(taskId, pending);
-        try { return await pending; } finally { if (this.opening.get(taskId) === pending) this.opening.delete(taskId); }
+        this.opening.set(this.key(taskId), pending);
+        try { return await pending; } finally { if (this.opening.get(this.key(taskId)) === pending) this.opening.delete(this.key(taskId)); }
     }
 
     private launch(record: TaskRecord, request?: LocalModelRequest) {
         const { taskId } = record.snapshot;
-        const active = this.workers.get(taskId);
+        const active = this.workers.get(this.key(taskId));
         if (active || this.closing) return active?.started;
         const controller = new AbortController();
         const { signal } = controller;
@@ -80,7 +99,7 @@ export class ModelTasks {
             const snapshot = { ...record.snapshot, ...patch, updatedAt: Date.now(), revision: randomUUID() };
             await this.storage.save("task", taskId, { ...record, snapshot }, "models");
             record.snapshot = snapshot;
-            for (const wake of this.observers.get(taskId) ?? []) wake();
+            for (const wake of this.observers.get(this.key(taskId)) ?? []) wake();
         };
         const started = request ? Promise.resolve() : save({ status: "running", code: undefined, message: undefined });
         const run = async () => {
@@ -133,11 +152,11 @@ export class ModelTasks {
             }
         };
         const done = run().catch((error) => {
-            this.writeFailures.add(taskId);
-            for (const wake of this.observers.get(taskId) ?? []) wake();
+            this.writeFailures.add(this.key(taskId));
+            for (const wake of this.observers.get(this.key(taskId)) ?? []) wake();
             logger.error("Task could not be saved", { taskId, error });
-        }).finally(() => this.workers.delete(taskId));
-        this.workers.set(taskId, { controller, started, done });
+        }).finally(() => this.workers.delete(this.key(taskId)));
+        this.workers.set(this.key(taskId), { controller, started, done });
         return started;
     }
 
@@ -146,24 +165,24 @@ export class ModelTasks {
         // 先订阅再读，终态即使恰好写在两者之间也不会漏掉。
         let wake!: () => void;
         const changed = new Promise<void>((resolve) => { wake = resolve; });
-        const observers = this.observers.get(taskId) ?? new Set();
-        this.observers.set(taskId, observers);
+        const observers = this.observers.get(this.key(taskId)) ?? new Set();
+        this.observers.set(this.key(taskId), observers);
         observers.add(wake);
         signal.addEventListener("abort", wake, { once: true });
         try {
             signal.throwIfAborted();
             const row = await this.storage.read<TaskRecord>("task", taskId);
             if (!row?.value) throw new ModelExecutionError("MODEL_TASK_MISSING");
-            if (this.writeFailures.has(taskId)) throw new ModelExecutionError("MODEL_UNAVAILABLE");
+            if (this.writeFailures.has(this.key(taskId))) throw new ModelExecutionError("MODEL_UNAVAILABLE");
             const task = row.value.snapshot;
             if (task.status !== "running" || task.revision !== after) return task;
             await changed;
             signal.throwIfAborted();
-            if (this.writeFailures.has(taskId)) throw new ModelExecutionError("MODEL_UNAVAILABLE");
+            if (this.writeFailures.has(this.key(taskId))) throw new ModelExecutionError("MODEL_UNAVAILABLE");
             return (await this.storage.read<TaskRecord>("task", taskId))!.value!.snapshot;
         } finally {
             observers.delete(wake);
-            if (!observers.size) this.observers.delete(taskId);
+            if (!observers.size) this.observers.delete(this.key(taskId));
             signal.removeEventListener("abort", wake);
         }
     }
@@ -173,7 +192,7 @@ export class ModelTasks {
         const row = await this.storage.read<TaskRecord>("task", taskId);
         if (!row?.value) throw new ModelExecutionError("MODEL_TASK_MISSING");
         if (row.value.snapshot.status === "paused" && row.value.remote?.channelFingerprint) {
-            await this.workers.get(taskId)?.done;
+            await this.workers.get(this.key(taskId))?.done;
             const latest = await this.storage.read<TaskRecord>("task", taskId);
             if (latest?.value?.snapshot.status === "paused") await this.launch(latest.value);
         }
@@ -181,8 +200,8 @@ export class ModelTasks {
 
     async cancel(taskId: string) {
         await this.ready;
-        await this.opening.get(taskId);
-        const worker = this.workers.get(taskId);
+        await this.opening.get(this.key(taskId));
+        const worker = this.workers.get(this.key(taskId));
         worker?.controller.abort();
         await worker?.done;
     }

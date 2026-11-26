@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants, createWriteStream } from "node:fs";
+import { constants, createWriteStream, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdir, open, readFile, readdir, rename, rm, stat, statfs, writeFile, type FileHandle } from "node:fs/promises";
+import { scopeDirectory } from "./scope.js";
 import path from "node:path";
 import { tryLock } from "fs-native-extensions";
 import { pipeline } from "node:stream/promises";
@@ -61,6 +62,23 @@ async function readRows(directory: string) {
     return Promise.all(names.map(async (name) => ({ base: path.join(directory, name.slice(0, -5)), row: JSON.parse(await readFile(path.join(directory, name), "utf8")) as StorageRecord })));
 }
 
+const ensuredRoots = new Set<string>();
+
+/** 多租户下懒建用户数据根目录及其 workspace.json；每个目录只检查一次。 */
+function ensureUserRoot(dir: string) {
+    if (ensuredRoots.has(dir)) return;
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const manifest = path.join(dir, "workspace.json");
+    if (!existsSync(manifest)) {
+        try {
+            writeFileSync(manifest, JSON.stringify({ schemaVersion: 1, id: randomUUID() }, null, 2), { mode: 0o600, flag: "wx" });
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        }
+    }
+    ensuredRoots.add(dir);
+}
+
 export class FsStorage {
     private queue: Promise<unknown> = Promise.resolve();
     private listeners = new Set<(event: StorageChange) => void>();
@@ -87,10 +105,17 @@ export class FsStorage {
         }
     }
 
+    /** 当前作用域的数据根目录；用户作用域下首次访问时懒建目录与 manifest。 */
+    root() {
+        const root = scopeDirectory(this.directory);
+        if (root !== this.directory) ensureUserRoot(root);
+        return root;
+    }
+
     private collectionPath(collection: string) {
         const relative = collection.startsWith("plugin:") ? `${pluginData}/${safeName(collection.slice("plugin:".length))}` : collection.startsWith("plugin-files:") ? `${pluginFiles}/${safeName(collection.slice("plugin-files:".length))}` : directories[collection];
         if (!relative) throw new StorageError("STORAGE_INVALID");
-        return path.join(this.directory, relative);
+        return path.join(this.root(), relative);
     }
 
     private recordPath(collection: string, key: string) {
@@ -147,7 +172,7 @@ export class FsStorage {
     }
 
     async inspectUsage(): Promise<StorageUsage> {
-        const [files, disk] = await Promise.all([readFileSizes(this.directory), statfs(this.directory)]);
+        const [files, disk] = await Promise.all([readFileSizes(this.root()), statfs(this.root())]);
         const categories: StorageCategoryUsage[] = [];
         const takeFiles = (prefix: string) => {
             let bytes = 0;
@@ -179,15 +204,15 @@ export class FsStorage {
     /** 删除没有被任何记录引用的原件及缩略图，返回删除的文件数与字节数。 */
     cleanup() {
         return this.commit(async () => {
-            const subdirectories = async (parent: string) => (await readNames(path.join(this.directory, parent))).map((name) => path.join(parent, name));
+            const subdirectories = async (parent: string) => (await readNames(path.join(this.root(), parent))).map((name) => path.join(parent, name));
             const [dataDirectories, fileDirectories] = await Promise.all([subdirectories(pluginData), subdirectories(pluginFiles)]);
             const used = new Set<string>();
             for (const directory of [...recordDirectories, ...dataDirectories]) {
-                for (const { row } of await readRows(path.join(this.directory, directory))) collectStringValues(row.value, used);
+                for (const { row } of await readRows(path.join(this.root(), directory))) collectStringValues(row.value, used);
             }
             let files = 0, bytes = 0;
             for (const directory of [...binaryDirectories, ...fileDirectories]) {
-                for (const { base, row } of await readRows(path.join(this.directory, directory))) {
+                for (const { base, row } of await readRows(path.join(this.root(), directory))) {
                     if (used.has(row.key)) continue;
                     const file = binaryFile(base, (row.value as { mime: string }).mime);
                     bytes += (await stat(file)).size;
@@ -402,6 +427,8 @@ async function readFileSizes(directory: string, prefix = ""): Promise<Map<string
     for (const entry of await readdir(path.join(directory, prefix), { withFileTypes: true })) {
         const name = prefix ? `${prefix}/${entry.name}` : entry.name;
         if (entry.isDirectory()) {
+            // 基础目录下带 workspace.json 的子目录是其他用户的数据根，不计入当前用量。
+            if (!prefix && existsSync(path.join(directory, entry.name, "workspace.json"))) continue;
             for (const [file, size] of await readFileSizes(directory, name)) files.set(file, size);
         } else if (entry.isFile()) {
             files.set(name, (await stat(path.join(directory, name))).size);

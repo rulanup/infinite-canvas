@@ -6,6 +6,7 @@ import type { Server } from "node:http";
 import { WebSocketServer } from "ws";
 import { StorageError } from "@infinite-canvas/shared/storage-data";
 import type { FsStorage } from "../storage/fs-storage.js";
+import { currentStorageUser, runInStorageScope } from "../storage/scope.js";
 import { mountStorage, watchStorage } from "./storage.js";
 import { mountModels } from "./models.js";
 import { requestSignal } from "./request-signal.js";
@@ -34,7 +35,41 @@ function resolveAllowedHosts() {
 
 const allowedHosts = resolveAllowedHosts();
 
-export function createCanvasHttpApp(config: ServerConfig, session: CanvasSession, options?: { storage: FsStorage; tasks?: ModelTasks; web?: RequestHandler; plugins?: PluginManager }) {
+/** 多租户：用户标识只能由 sub2api 反代注入；CANVAS_REQUIRE_USER=1 时缺失或非法直接拒绝。 */
+const requireUser = /^(1|true|yes)$/i.test((process.env.CANVAS_REQUIRE_USER || "").trim());
+const CANVAS_USER = /^[\w-]{1,64}$/;
+
+/** 每个用户一份 CanvasSession：活动画布、客户端连接、待回结果互不可见。无用户作用域时用原始实例。 */
+const userSessions = new WeakMap<CanvasSession, Map<string, CanvasSession>>();
+
+function sessionFor(base: CanvasSession) {
+    const user = currentStorageUser();
+    if (!user) return base;
+    let sessions = userSessions.get(base);
+    if (!sessions) userSessions.set(base, sessions = new Map());
+    let session = sessions.get(user);
+    if (!session) sessions.set(user, session = new CanvasSession());
+    return session;
+}
+
+/** 调用时按当前请求的用户作用域转发到对应 CanvasSession。 */
+function scopedSession(base: CanvasSession): CanvasSession {
+    return new Proxy(base, {
+        get(_target, prop) {
+            const target = sessionFor(base);
+            const value = Reflect.get(target, prop, target);
+            return typeof value === "function" ? value.bind(target) : value;
+        },
+    });
+}
+
+function canvasUser(value: string | string[] | undefined) {
+    const id = (Array.isArray(value) ? "" : value ?? "").trim();
+    return CANVAS_USER.test(id) ? id : undefined;
+}
+
+export function createCanvasHttpApp(config: ServerConfig, baseSession: CanvasSession, options?: { storage: FsStorage; tasks?: ModelTasks; web?: RequestHandler; plugins?: PluginManager }) {
+    const session = scopedSession(baseSession);
     const app = express();
     app.disable("x-powered-by");
     app.use((req, res, next) => {
@@ -56,7 +91,10 @@ export function createCanvasHttpApp(config: ServerConfig, session: CanvasSession
         if (req.method === "OPTIONS" && (req.headers["access-control-request-method"] || !/^\/api\/network\/sync\/?$/i.test(req.path))) return void res.sendStatus(204);
         const protectedRoute = storageRequest || /^\/(?:mcp|api\/tools(?:\/list)?)\/?$/i.test(req.path) || ["/canvas/state", "/canvas/activate", "/canvas/result"].includes(req.path) && req.method === "POST";
         if (protectedRoute && !sameOrigin) return void res.sendStatus(403);
-        next();
+        // 按反代注入的 X-Canvas-User 切换数据根目录；缺失时保持单用户行为。
+        const userId = canvasUser(req.headers["x-canvas-user"]);
+        if (!userId && requireUser && req.path !== "/health") return void res.sendStatus(401);
+        return runInStorageScope(userId, () => next());
     });
     if (options) mountStorage(app, options.storage);
     if (options) mountNetwork(app);
@@ -114,7 +152,8 @@ export function createCanvasHttpApp(config: ServerConfig, session: CanvasSession
 }
 
 // 推送改用 WebSocket：浏览器对同一地址最多 6 个普通连接，长连接会让多开的页面卡住，WebSocket 不占这部分名额。
-export function mountEventSockets(http: Server, session: CanvasSession, storage: FsStorage) {
+export function mountEventSockets(http: Server, baseSession: CanvasSession, storage: FsStorage) {
+    const session = scopedSession(baseSession);
     const sockets = new WebSocketServer({ noServer: true });
     http.on("upgrade", (req, socket, head) => {
         const url = new URL(req.url!, "http://127.0.0.1");
@@ -130,11 +169,14 @@ export function mountEventSockets(http: Server, session: CanvasSession, storage:
             try { originHostname = new URL(origin).hostname; } catch { originHostname = ""; }
             if (!sameHost && !allowedHosts.includes(originHostname)) return void socket.destroy();
         }
-        sockets.handleUpgrade(req, socket, head, (client) => {
+        // WebSocket 不经过 Express 中间件，这里单独进入用户作用域。
+        const userId = canvasUser(req.headers["x-canvas-user"]);
+        if (!userId && requireUser) return void socket.destroy();
+        sockets.handleUpgrade(req, socket, head, (client) => runInStorageScope(userId, () => {
             if (url.pathname === "/api/storage/events") return watchStorage(client, storage);
             const clientId = url.searchParams.get("clientId");
             if (!clientId) return void client.close(1008);
             session.openEvents(clientId, client);
-        });
+        }));
     });
 }
