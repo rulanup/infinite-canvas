@@ -18,10 +18,12 @@ export async function executeModel(storage: FsStorage, request: LocalModelReques
     const { channel, group } = await findChannelGroup(storage, request.call.groupId);
     if (remote && remote.channelFingerprint !== await modelConnectionFingerprint(taskId!, channel, group)) throw new ModelExecutionError("MODEL_VIDEO_CONNECTION_CHANGED");
     const model = group.models.find((item) => item.name === request.call.model);
-    if (!model || !group.apiKey || !channel.baseUrl) throw new ModelExecutionError("MODEL_CONFIG_MISSING");
+    if (!model || !(request.apiKey?.trim() || group.apiKey) || !channel.baseUrl) throw new ModelExecutionError("MODEL_CONFIG_MISSING");
     const capability = request.action === "video-query" ? "video" : request.action;
     if (model.capability !== capability || request.action !== "video-query" && model.scriptId !== request.call.scriptId) throw new ModelExecutionError("MODEL_CONFIG_MISSING");
-    const config = { ...request.call, baseUrl: channel.baseUrl, apiKey: group.apiKey, agentSettings: model.agentSettings };
+    // 内嵌画布按登录用户下发 key 时以请求为准，否则沿用渠道分组里保存的 key。
+    const apiKey = request.apiKey?.trim() || group.apiKey;
+    const config = { ...request.call, baseUrl: channel.baseUrl, apiKey, agentSettings: model.agentSettings };
     const workspace = await storage.read<WorkspaceConfig>("privateConfig", "workspace");
     const savedScripts = await storage.read<{ state: SavedCallScripts }>("scripts", "state");
     const toBlob = async (source: string | Blob) => {

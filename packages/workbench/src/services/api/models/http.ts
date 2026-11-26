@@ -3,6 +3,7 @@ import { assertModelTaskTarget, modelAssetUrl, modelErrorMessages, ModelExecutio
 import type { ModelCall, ModelTextEvent } from "@infinite-canvas/shared/model-execution";
 import { storage } from "@workbench/services/storage/runtime";
 import { storedAssetFromUrl } from "@workbench/lib/media-source";
+import { getCanvasApiKey } from "@workbench/lib/canvas-identity";
 import { channelWrites } from "@workbench/stores/use-config-store";
 import { workspaceConfigWrites } from "@workbench/stores/use-workspace-config-store";
 import { callScriptsSaved } from "@workbench/stores/use-call-script-store";
@@ -143,6 +144,7 @@ export function createHttpModels(): ModelAdapter {
     }
     async function execute<T>(action: LocalModelRequest["action"], call: ModelCall, payload: Omit<LocalModelRequest, "action" | "call">, options?: ModelRequestOptions & { onEvent?: (event: ModelTextEvent) => void }): Promise<T> {
         const { groupId, model, scriptId, script, systemPrompt, reasoningEffort } = call;
+        const canvasApiKey = getCanvasApiKey();
         try {
             await Promise.all([channelWrites.flush(), callScriptsSaved, workspaceConfigWrites.flush()]);
             options?.signal?.throwIfAborted();
@@ -152,7 +154,7 @@ export function createHttpModels(): ModelAdapter {
                 options?.signal?.throwIfAborted();
                 const submission = readTaskResponse("/api/models/task", {
                     method: "POST", headers: { "content-type": "application/json" },
-                    body: JSON.stringify({ taskId, target: options?.target, request: { action, call: { groupId, model, scriptId, script, systemPrompt, reasoningEffort }, ...payload } }),
+                    body: JSON.stringify({ taskId, target: options?.target, request: { action, call: { groupId, model, scriptId, script, systemPrompt, reasoningEffort }, ...payload, ...(canvasApiKey ? { apiKey: canvasApiKey } : {}) } }),
                 }).then((snapshot) => { assertModelTaskTarget(snapshot, taskId, options?.target); return snapshot; });
                 options?.onTaskSubmission?.(submission);
                 let submitted = await submission;
@@ -176,7 +178,7 @@ export function createHttpModels(): ModelAdapter {
             }
             const response = await fetch("/api/models/execute", {
                 method: "POST", headers: { "content-type": "application/json" }, signal: options?.signal,
-                body: JSON.stringify({ action, call: { groupId, model, scriptId, script, systemPrompt, reasoningEffort }, ...payload } satisfies LocalModelRequest),
+                body: JSON.stringify({ action, call: { groupId, model, scriptId, script, systemPrompt, reasoningEffort }, ...payload, ...(canvasApiKey ? { apiKey: canvasApiKey } : {}) } satisfies LocalModelRequest),
             });
             if (!response.ok || !response.headers.get("content-type")?.includes("text/event-stream")) throw new ModelExecutionError("MODEL_UNAVAILABLE");
             let completed = false;

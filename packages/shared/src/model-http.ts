@@ -76,6 +76,11 @@ export const localModelRequestSchema = z.object({
     audios: z.array(sourceSchema).optional(),
     messages: z.array(z.object({ role: z.enum(["system", "user", "assistant"]), content: z.union([z.string(), z.array(z.union([z.object({ type: z.literal("text"), text: z.string() }), z.object({ type: z.literal("image_url"), image_url: sourceSchema })]))]) })).optional(),
     options: z.record(z.unknown()).optional(),
+    /**
+     * 调用方自带的上游 API key（内嵌画布场景：由宿主按登录用户下发）。
+     * 缺省时使用渠道分组里保存的 key。
+     */
+    apiKey: z.string().optional(),
 }).strict();
 export type LocalModelRequest = z.infer<typeof localModelRequestSchema>;
 export type ModelSource = z.infer<typeof sourceSchema>;
