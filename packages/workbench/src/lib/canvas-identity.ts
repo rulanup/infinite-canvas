@@ -33,6 +33,24 @@ export function getCanvasApiKey(): string | undefined {
 }
 
 /**
+ * 嵌入式运行时：等待宿主（sub2api）通过 postMessage 下发身份。
+ * 只在被 iframe 嵌页时生效，独立打开画布不会触发。
+ */
+export function installCanvasIdentityBridge() {
+    if (typeof window === "undefined" || window.parent === window) return;
+    window.addEventListener("message", (event) => {
+        if (event.source !== window.parent) return;
+        const payload = event.data;
+        if (!payload || typeof payload !== "object") return;
+        if ((payload as { type?: unknown }).type !== "sub2api.identity") return;
+        // 宿主与画布同源部署时 origin 相同；跨端口部署由 allowOrigin 显式放开。
+        if (applyCanvasIdentity(payload, event.origin, event.origin)) {
+            window.dispatchEvent(new CustomEvent("canvas:identity", { detail: getCanvasIdentity() }));
+        }
+    });
+}
+
+/**
  * 保存宿主下发的身份。hostOrigin 必须与 allowOrigin 一致，
  * 避免任意页面通过 postMessage 注入他人 key。
  */

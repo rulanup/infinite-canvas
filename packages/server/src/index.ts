@@ -11,10 +11,28 @@ import { createStaticWeb } from "./server/web.js";
 import type { ServerConfig } from "./config.js";
 import { logger } from "./utils/logger.js";
 
+/**
+ * 监听地址与对外主机名默认保持本机（127.0.0.1），仅在显式设置环境变量时才对外暴露。
+ * CANVAS_BIND_HOST=0.0.0.0 让服务可被容器/局域网访问；
+ * CANVAS_PUBLIC_HOST 用于 config.url，避免页面内绝对地址仍指向 127.0.0.1。
+ */
+function resolveBindHost() {
+    const value = (process.env.CANVAS_BIND_HOST || "").trim();
+    return value || "127.0.0.1";
+}
+
+function resolvePublicHost(bindHost: string) {
+    const value = (process.env.CANVAS_PUBLIC_HOST || "").trim();
+    if (value) return value;
+    return bindHost === "0.0.0.0" ? "127.0.0.1" : bindHost;
+}
+
 export type WebHost = { middleware: RequestHandler; close: () => Promise<void> };
 export type LocalWeb = { directory: string } | { create: (http: Server) => Promise<WebHost> };
 
 export async function startLocalServer(options: { dataDirectory: string; web: LocalWeb; port: number; skipThirdPartyPlugins?: boolean; mcp?: ServerConfig["mcp"] }) {
+    const bindHost = resolveBindHost();
+    const publicHost = resolvePublicHost(bindHost);
     if ("directory" in options.web) await access(path.join(options.web.directory, "index.html"));
     const storage = await FsStorage.open(options.dataDirectory);
     const plugins = new PluginManager(storage, options.skipThirdPartyPlugins);
@@ -50,9 +68,11 @@ export async function startLocalServer(options: { dataDirectory: string; web: Lo
         mountEventSockets(http, session, storage);
         await new Promise<void>((resolve, reject) => {
             http.once("error", reject);
-            http.listen(options.port, "127.0.0.1", () => { http.off("error", reject); resolve(); });
+            http.listen(options.port, bindHost, () => { http.off("error", reject); resolve(); });
         });
-        config.url = `http://127.0.0.1:${(http.address() as { port: number }).port}`;
+        const boundPort = (http.address() as { port: number }).port;
+        // 对外可访问时用真实主机名，避免页面内绝对地址仍指向 127.0.0.1。
+        config.url = `http://${bindHost === "0.0.0.0" ? publicHost : bindHost}:${boundPort}`;
     } catch (error) {
         try { await close(); } finally { throw error; }
     }

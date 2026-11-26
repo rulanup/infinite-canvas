@@ -8,10 +8,13 @@ import { initializeNetwork } from "../services/network/runtime";
 import { initializeWorkspaceConfig } from "../services/workspace-config/runtime";
 import { createBrowserWorkspaceConfig } from "../services/workspace-config/browser";
 import { loadWorkspaceConfig } from "../stores/use-workspace-config-store";
+import { installCanvasIdentityBridge } from "../lib/canvas-identity";
 import { initializeStorageInspection } from "../services/storage-inspection/runtime";
 import { createBrowserStorageInspection } from "../services/storage-inspection/browser";
 
 export async function startBrowser() {
+    // 被宿主页面嵌入时先装上身份桥，随后各服务初始化即可读到 key。
+    installCanvasIdentityBridge();
     await prepareBrowserStorage();
     const storage = createBrowserStorage();
     initializeStorage(storage);

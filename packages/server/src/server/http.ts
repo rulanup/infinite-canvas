@@ -19,15 +19,33 @@ import { logger } from "../utils/logger.js";
 import { createCanvasMcpServer } from "./mcp.js";
 import { canvasToolError } from "@infinite-canvas/shared/canvas/tools/errors";
 
+/**
+ * 允许访问的 Host 头白名单。默认仅本机回环地址，
+ * 通过 CANVAS_ALLOW_HOSTS（逗号分隔）显式放开局域网/反代域名。
+ */
+function resolveAllowedHosts() {
+    const hosts = ["127.0.0.1", "localhost", "[::1]"];
+    for (const entry of (process.env.CANVAS_ALLOW_HOSTS || "").split(",")) {
+        const value = entry.trim();
+        if (value && !hosts.includes(value)) hosts.push(value);
+    }
+    return hosts;
+}
+
+const allowedHosts = resolveAllowedHosts();
+
 export function createCanvasHttpApp(config: ServerConfig, session: CanvasSession, options?: { storage: FsStorage; tasks?: ModelTasks; web?: RequestHandler; plugins?: PluginManager }) {
     const app = express();
     app.disable("x-powered-by");
     app.use((req, res, next) => {
-        if (!["127.0.0.1", "localhost", "[::1]"].includes(req.hostname)) return void res.sendStatus(403);
+        if (!allowedHosts.includes(req.hostname)) return void res.sendStatus(403);
         res.setHeader("Cache-Control", "no-store");
         res.setHeader("X-Content-Type-Options", "nosniff");
         const origin = req.headers.origin;
-        const sameOrigin = !origin || origin === `http://${req.headers.host}`;
+        // 被宿主页 iframe 嵌入时 Origin 是宿主地址、Host 是画布地址，
+        // 只要宿主在允许列表内就按同源处理，否则存储类接口会被 403 挡掉。
+        const originHostname = (() => { try { return origin ? new URL(origin).hostname : ""; } catch { return ""; } })();
+        const sameOrigin = !origin || origin === `http://${req.headers.host}` || origin === `https://${req.headers.host}` || allowedHosts.includes(originHostname);
         const storageRequest = /^\/api\/(?:archive|storage|storage-inspection|assets|models|channels|network|workspace-config|plugins)(?:\/|$)/i.test(req.path);
         if (storageRequest && !sameOrigin) return void res.sendStatus(403);
         res.setHeader("Vary", "Origin");
@@ -102,7 +120,16 @@ export function mountEventSockets(http: Server, session: CanvasSession, storage:
         const url = new URL(req.url!, "http://127.0.0.1");
         if (url.pathname !== "/events" && url.pathname !== "/api/storage/events") return;
         // WebSocket 不受浏览器跨域限制，必须只接受本机地址和同源页面。
-        if (!["127.0.0.1", "localhost", "[::1]"].includes(new URL(`http://${req.headers.host}`).hostname) || req.headers.origin !== `http://${req.headers.host}`) return void socket.destroy();
+        if (!allowedHosts.includes(new URL(`http://${req.headers.host}`).hostname)) return void socket.destroy();
+        // 同源校验：Origin 与 Host 一致，或其主机在允许列表内。
+        // 被宿主页面以 iframe 嵌入时，Origin 是宿主地址、Host 是画布地址，两者本就不同。
+        const origin = req.headers.origin;
+        if (origin) {
+            const sameHost = origin === `http://${req.headers.host}` || origin === `https://${req.headers.host}`;
+            let originHostname = "";
+            try { originHostname = new URL(origin).hostname; } catch { originHostname = ""; }
+            if (!sameHost && !allowedHosts.includes(originHostname)) return void socket.destroy();
+        }
         sockets.handleUpgrade(req, socket, head, (client) => {
             if (url.pathname === "/api/storage/events") return watchStorage(client, storage);
             const clientId = url.searchParams.get("clientId");
