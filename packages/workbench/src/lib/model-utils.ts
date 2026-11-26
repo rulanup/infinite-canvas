@@ -19,20 +19,42 @@ export function guessCapability(name: string): ModelCapability {
 /**
  * 新增模型或切换用途时，按名称和用途预选调用脚本。
  */
-export function defaultCallScriptId(name: string, capability: ModelCapability) {
+export function defaultCallScriptId(name: string, capability: ModelCapability, protocols?: string[]) {
+    if (capability === "image" && protocols?.includes("gemini")) return "gemini-image";
     if (capability === "image" && /gemini|nano[-_ ]?banana/i.test(name)) return "gemini-image";
-    if (capability === "image" && /grok.*image/i.test(name)) return "grok-image";
+    // grok-imagine 不含子串 "image"，必须显式覆盖 imagine，否则会落到 openai-image。
+    if (capability === "image" && /grok.*(image|imagine)/i.test(name)) return "grok-image";
     if (capability === "video" && /grok.*video/i.test(name)) return "grok-video-generations";
     if (capability === "audio") return "openai-chat-audio";
     return `openai-${capability}`;
 }
 
 /**
- * 为手动添加和拉取的模型生成初始配置。
+ * 服务端在模型列表里可携带的可选元数据；结构上与 ChannelModelEntry 兼容，
+ * 这里不直接引用它，避免纯工具模块依赖 model-runtime。
  */
-export function detectChannelModel(name: string) {
-    const capability = guessCapability(name);
-    return { name, capability, scriptId: defaultCallScriptId(name, capability) };
+export type ChannelModelMeta = {
+    capability?: ModelCapability;
+    protocols?: string[];
+    image?: { sizeTiers?: string[]; sizes?: string[] };
+};
+
+/**
+ * 为手动添加和拉取的模型生成初始配置。
+ *
+ * 服务端给了元数据就以它为准（能力、协议、参数约束），没给才回退到按名称判断。
+ * protocols 与 image 必须原样带进返回值：它们会被存进渠道配置，并在发起生图时
+ * 决定脚本选择与尺寸收敛，丢掉即断链。
+ */
+export function detectChannelModel(name: string, meta?: ChannelModelMeta) {
+    const capability = meta?.capability ?? guessCapability(name);
+    return {
+        name,
+        capability,
+        scriptId: defaultCallScriptId(name, capability, meta?.protocols),
+        ...(meta?.protocols ? { protocols: meta.protocols } : {}),
+        ...(meta?.image ? { image: meta.image } : {}),
+    };
 }
 
 /**
