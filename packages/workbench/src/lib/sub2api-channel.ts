@@ -1,7 +1,7 @@
 import type { ModelChannel } from "@infinite-canvas/shared/channels";
 import { channels } from "@workbench/services/channels/runtime";
 import { channelWrites, createModelChannel, createModelGroup, updateChannels, useConfigStore } from "@workbench/stores/use-config-store";
-import { detectChannelModel } from "@workbench/lib/model-utils";
+import { defaultCallScriptId, detectChannelModel, type ChannelModelMeta } from "@workbench/lib/model-utils";
 import type { CanvasIdentity } from "./canvas-identity";
 
 /** 固定 id：重复同步只更新这一个渠道和分组，不会越加越多。 */
@@ -49,8 +49,30 @@ async function run({ apiKey, apiBase }: CanvasIdentity) {
     if (!saved || !savedGroup) return;
     const known = new Map(savedGroup.models.map((model) => [model.name, model]));
     const seen = new Set<string>();
-    const models = entries.filter((entry) => !seen.has(entry.name) && seen.add(entry.name)).map((entry) => known.get(entry.name) ?? detectChannelModel(entry.name, entry));
+    const models = entries.filter((entry) => !seen.has(entry.name) && seen.add(entry.name)).map((entry) => mergeServerModel(known.get(entry.name), entry));
     const nextGroup = { ...savedGroup, models };
     await updateChannels(latest.map((item) => item.id === CHANNEL_ID ? { ...saved, groups: saved.groups.map((g) => g.id === GROUP_ID ? nextGroup : g) } : item));
     await channelWrites.flush();
+}
+
+type SavedModel = ModelChannel["groups"][number]["models"][number];
+
+/**
+ * 以 sub2api 下发的元数据为准刷新已保存的模型：能力变了（如旧版本把视频模型猜成文本）就按新能力重选调用脚本；
+ * 能力没变时保留用户设置，只有调用脚本仍是自动预选值时才按新协议重选。
+ */
+function mergeServerModel(saved: SavedModel | undefined, entry: ChannelModelMeta & { name: string }): SavedModel {
+    const detected = detectChannelModel(entry.name, entry) as SavedModel;
+    if (!saved) return detected;
+    if (entry.capability && entry.capability !== saved.capability) return { ...saved, ...detected };
+    const savedProtocols = (saved as { protocols?: string[] }).protocols;
+    const autoScript = !saved.scriptId
+        || saved.scriptId === defaultCallScriptId(saved.name, saved.capability, savedProtocols)
+        || saved.scriptId === defaultCallScriptId(saved.name, saved.capability);
+    return {
+        ...saved,
+        ...(entry.protocols ? { protocols: entry.protocols } : {}),
+        ...(entry.image ? { image: entry.image } : {}),
+        ...(autoScript ? { scriptId: defaultCallScriptId(saved.name, saved.capability, entry.protocols ?? savedProtocols) } : {}),
+    };
 }

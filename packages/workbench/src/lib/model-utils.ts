@@ -1,6 +1,6 @@
 import type { ModelCapability } from "@infinite-canvas/shared/models";
 
-const VIDEO_KEYWORDS = ["video", "sora", "veo", "kling", "hailuo", "seedance", "vidu", "runway", "luma", "pixverse", "gemini-omni", "即梦", "可灵", "海螺"];
+const VIDEO_KEYWORDS = ["video", "sora", "veo", "kling", "hailuo", "minimax", "seedance", "vidu", "runway", "luma", "pixverse", "gemini-omni", "即梦", "可灵", "海螺"];
 const AUDIO_KEYWORDS = ["audio", "tts", "speech", "voice", "music", "sound", "suno", "lyria"];
 const IMAGE_KEYWORDS = ["seedream", "gpt-image", "image", "dall-e", "dalle", "imagen", "flux", "sdxl", "stable-diffusion", "midjourney", "t2i", "i2i", "nano-banana", "nano_banana", "nano banana", "nanobanana"];
 
@@ -26,6 +26,8 @@ export function defaultCallScriptId(name: string, capability: ModelCapability, p
     if (capability === "image" && /grok.*(image|imagine)/i.test(name)) return "grok-image";
     if (capability === "video" && /grok.*video/i.test(name)) return "grok-video-generations";
     if (capability === "audio") return "openai-chat-audio";
+    // 只声明 chat 协议的文本模型（如 sub2api 下发的 deepseek、claude）不能走 /v1/responses。
+    if (capability === "text" && protocols?.includes("chat") && !protocols.includes("responses")) return "openai-chat-text";
     return `openai-${capability}`;
 }
 

@@ -344,6 +344,8 @@ function withChannels(config: AiConfig, channels: ModelChannel[]): AiConfig {
 function pickDefaultModel(config: AiConfig, capability: ModelCapability, current: string) {
     const options = selectableModelsByCapability(config, capability);
     const normalized = normalizeModelOptionValue(current, config.channels);
-    return current ? normalized : options[0] || "";
+    // 当前模型不在可选列表里（未选、已下线或用途变了）时回退到第一个可选模型；列表为空时不动，避免配置加载前被清空。
+    if (!options.length) return normalized;
+    return options.includes(normalized) ? normalized : options[0];
 }
 

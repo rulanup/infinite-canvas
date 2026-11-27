@@ -6,7 +6,7 @@ import { PluginError } from "@infinite-canvas/shared/plugins";
 import { useAgentStore } from "@workbench/stores/use-agent-store";
 import { useCanvasStore } from "@workbench/stores/canvas/use-canvas-store";
 import { agentHistoryReady, confirmChatSubmission, useAgentChatStore, type AgentChatImage, type AgentChatItem, type ChatSubmission } from "@workbench/stores/use-agent-chat-store";
-import { channelWrites, resolveModelRequestConfig, useConfigStore } from "@workbench/stores/use-config-store";
+import { channelWrites, resolveModelRequestConfig, useConfigStore, selectableModelsByCapability } from "@workbench/stores/use-config-store";
 import { callScriptsReady } from "@workbench/stores/use-call-script-store";
 import { createCanvasTools } from "@workbench/lib/agent/canvas-tools";
 import { runModelCall } from "./model-plugin";
@@ -112,7 +112,9 @@ async function runAgentMessage(projectId: string, threadId: string, options: Age
     const toolItemIds = new Map<string, string>();
     let assistantId = "";
     let compacted = false;
-    let failureMessage = "请在渠道设置中选择可用的文本模型，再发送消息。";
+    let failureMessage = selectableModelsByCapability(useConfigStore.getState().config, "text").length
+        ? "请在渠道设置中选择可用的文本模型，再发送消息。"
+        : "当前画布分组里没有对话模型，请联系管理员在画布分组中加入对话模型。";
     agent.setAgentState({ runningThreadId: threadId, controller, liveItems: items, activeTab: "chat" });
     const updateItem = (id: string, patch: Partial<AgentChatItem>) => {
         items = items.map((item) => item.id === id ? { ...item, ...patch } : item);
