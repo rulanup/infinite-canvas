@@ -1,0 +1,32 @@
+# 多租户画布服务端镜像：Node 服务端 + 内置前端，只给 sub2api 画布网关访问。
+# 网关负责登录与注入 X-Canvas-User，本服务不对公网暴露端口。
+FROM node:24-bookworm-slim AS build
+
+RUN npm install --global pnpm@12.6.0
+
+WORKDIR /app
+COPY . .
+RUN --mount=type=cache,target=/pnpm/store pnpm install --frozen-lockfile --ignore-scripts --store-dir=/pnpm/store
+RUN pnpm --filter @basketikun/infinite-canvas build
+# 只带运行时依赖：服务端代码已由 esbuild 打包，workspace 包不需要再装。
+RUN --mount=type=cache,target=/pnpm/store pnpm --filter @basketikun/infinite-canvas deploy --prod --legacy --ignore-scripts --store-dir=/pnpm/store /out
+
+FROM node:24-bookworm-slim
+
+# 容器内监听所有地址供网关访问；缺少网关注入的用户头一律拒绝。
+ENV NODE_ENV=production \
+    CANVAS_BIND_HOST=0.0.0.0 \
+    CANVAS_REQUIRE_USER=1
+
+WORKDIR /app
+COPY --from=build --chown=node:node /out /app
+RUN mkdir -p /data && chown node:node /data
+
+USER node
+EXPOSE 3000
+VOLUME /data
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD node -e "fetch('http://127.0.0.1:3000/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+
+CMD ["node", "dist/index.js", "serve", "--port", "3000", "--data-dir", "/data"]
