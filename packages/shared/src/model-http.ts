@@ -14,6 +14,7 @@ export const modelErrorMessages = {
     MODEL_AUTH: "鉴权失败，请检查 API Key、套餐权限或模型权限",
     MODEL_INVALID_KEY: "无效的令牌，请检查 API Key 是否正确",
     MODEL_LIMITED: "请求被限流或额度不足，请稍后重试",
+    MODEL_INSUFFICIENT_BALANCE: "余额不足，请先充值后再试。",
     MODEL_NOT_FOUND: "接口地址不存在（404），请检查 Base URL 和模型选择",
     MODEL_BAD_GATEWAY: "网关错误（502），接口服务暂时不可用，请稍后重试",
     MODEL_BUSY: "服务繁忙（503），请稍后重试",
@@ -50,6 +51,16 @@ export type ModelErrorCode = keyof typeof modelErrorMessages;
 /** detail 为模型服务返回的错误说明，有则直接展示，否则展示错误码文案。 */
 export class ModelExecutionError extends Error {
     constructor(public code: ModelErrorCode, public detail?: string) { super(detail ?? modelErrorMessages[code]); }
+}
+
+/**
+ * sub2api 账户余额不足的响应：顶层 { code: "INSUFFICIENT_BALANCE" }，也兼容放在 error.code 里的写法。
+ * 上游生图账号余额不足返回的是小写 insufficient_balance（平台侧账号问题），不算用户余额不足。
+ */
+export function isInsufficientBalanceResponse(data: unknown): boolean {
+    if (!data || typeof data !== "object") return false;
+    const payload = data as { code?: unknown; error?: { code?: unknown } | string };
+    return payload.code === "INSUFFICIENT_BALANCE" || (typeof payload.error === "object" && payload.error?.code === "INSUFFICIENT_BALANCE");
 }
 
 export type ModelMediaInput = { url?: string; storageKey?: string };

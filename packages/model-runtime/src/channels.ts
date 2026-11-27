@@ -2,7 +2,7 @@ import axios from "axios";
 import type { ModelListFormat } from "@infinite-canvas/shared/channels";
 import type { ModelCapability } from "@infinite-canvas/shared/models";
 import { modelCapabilities } from "@infinite-canvas/shared/models";
-import { ModelExecutionError } from "@infinite-canvas/shared/model-http";
+import { isInsufficientBalanceResponse, ModelExecutionError } from "@infinite-canvas/shared/model-http";
 import { buildModelApiUrl } from "./script.js";
 
 /**
@@ -93,6 +93,7 @@ async function requestModelList(baseUrl: string, apiKey: string, format: ModelLi
         if (axios.isAxiosError(error)) {
             const status = error.response?.status;
             console.warn("[channels] model list request failed", { status, code: error.code });
+            if (isInsufficientBalanceResponse(error.response?.data)) throw new ModelExecutionError("MODEL_INSUFFICIENT_BALANCE");
             if (status === 401 || status === 403 || error.response?.data?.error?.code === "invalid_api_key") throw new ModelExecutionError("MODEL_LIST_AUTH");
             if (status === 429) throw new ModelExecutionError("MODEL_LIST_LIMITED");
             if (!error.response) throw new ModelExecutionError(url !== endpoint ? "MODEL_PROXY" : "MODEL_LIST_CONNECTION");

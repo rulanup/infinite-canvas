@@ -1,5 +1,5 @@
 import axios from "axios";
-import { ModelExecutionError, modelErrorMessages, type ModelErrorCode } from "@infinite-canvas/shared/model-http";
+import { isInsufficientBalanceResponse, ModelExecutionError, modelErrorMessages, type ModelErrorCode } from "@infinite-canvas/shared/model-http";
 import type { CallScript, ModelCapability } from "@infinite-canvas/shared/models";
 import type { ModelExecutionConfig } from "@infinite-canvas/shared/model-execution";
 import { builtinCallScripts } from "./call-scripts/builtin.js";
@@ -49,6 +49,8 @@ export function toModelError(error: unknown, proxied?: ScriptHost["proxied"]) {
     const status = response?.status;
     const networkCode = axios.isAxiosError(error) ? error.code : undefined;
     console.warn("Model call failed", { status, code: networkCode, name: error instanceof Error ? error.name : "Error" });
+    // 余额不足不展示上游英文原文，固定提示用户充值。
+    if (isInsufficientBalanceResponse(response?.data)) return new ModelExecutionError("MODEL_INSUFFICIENT_BALANCE");
     const message = error instanceof Error ? error.message : "";
     let code: ModelErrorCode = "MODEL_FAILED";
     if (Object.hasOwn(modelErrorMessages, message)) code = message as ModelErrorCode;
