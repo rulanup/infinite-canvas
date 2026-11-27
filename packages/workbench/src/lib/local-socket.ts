@@ -5,7 +5,9 @@ export function openLocalSocket(path: string, onMessage: (type: string, data: an
     let timer: ReturnType<typeof setTimeout>;
     let closed = false;
     const connect = () => {
-        socket = new WebSocket(`ws://${location.host}${path}`);
+        // 页面经 HTTPS（网关/反代）打开时必须用 wss，否则会被当成混合内容拦截。
+        const scheme = location.protocol === "https:" ? "wss" : "ws";
+        socket = new WebSocket(`${scheme}://${location.host}${path}`);
         socket.onmessage = (event) => {
             const message = JSON.parse(event.data) as { type: string; data: unknown };
             onMessage(message.type, message.data);
