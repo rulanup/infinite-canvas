@@ -10,17 +10,23 @@ const GROUP_ID = "sub2api-default";
 
 let queue: Promise<void> = Promise.resolve();
 let lastKey = "";
+let lastSyncAt = 0;
+/** 同一个 key 至少间隔 30 秒才重新同步：key 不变但后台可能改了它绑定的分组。 */
+const RESYNC_INTERVAL_MS = 30_000;
 
 /**
  * 嵌入 sub2api 时自动配置渠道：确保存在 baseUrl = apiBase + "/v1" 的 sub2api 渠道，
  * 分组 key 用宿主下发的用户专属 key，再从 /v1/models 拉取模型（带能力元数据）。
- * 渠道配置存在服务端、按用户隔离，所以每个账号各自一份。同一个 key 只同步一次。
+ * 渠道配置存在服务端、按用户隔离，所以每个账号各自一份。同一个 key 30 秒内只同步一次。
  */
-export function syncSub2apiChannel(identity: CanvasIdentity | undefined) {
-    if (!identity?.apiBase || !identity.apiKey || identity.apiKey === lastKey) return queue;
+export function syncSub2apiChannel(identity: CanvasIdentity | undefined, now = Date.now()) {
+    if (!identity?.apiBase || !identity.apiKey) return queue;
+    if (identity.apiKey === lastKey && now - lastSyncAt < RESYNC_INTERVAL_MS) return queue;
     lastKey = identity.apiKey;
+    lastSyncAt = now;
     queue = queue.then(() => run(identity)).catch((error) => {
         lastKey = "";
+        lastSyncAt = 0;
         console.warn("[sub2api] 渠道自动配置失败", error);
     });
     return queue;
